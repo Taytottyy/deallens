@@ -875,6 +875,7 @@ body::after {
     </div>
     <div class="header-actions">
       <button class="btn-header" id="btnNewDeal" style="display:none" onclick="resetApp()">+ New Deal</button>
+      <button class="btn-header" id="btnMemo" style="display:none" onclick="goToMemo()">Generate Memo</button>
       <button class="btn-header primary" id="btnExport" style="display:none" onclick="exportPDF()">Export PDF</button>
     </div>
   </header>
@@ -970,8 +971,8 @@ function formatSize(bytes) {
   return (bytes / 1048576).toFixed(1) + ' MB';
 }
 
-/* ===== PROCESSING ANIMATION ===== */
-function startAnalysis() {
+/* ===== PROCESSING ANIMATION + REAL API CALL ===== */
+async function startAnalysis() {
   showScreen('processingScreen');
   const steps = document.querySelectorAll('.processing-step');
   const status = document.getElementById('procStatus');
@@ -980,24 +981,59 @@ function startAnalysis() {
     'Evaluating metrics…', 'Mapping competitors…', 'Building snapshot…'
   ];
 
+  // Run animation in parallel with API call
+  let animFinished = false;
   let i = 0;
   function advanceStep() {
-    if (i > 0) steps[i - 1].classList.remove('active'), steps[i - 1].classList.add('done');
+    if (i > 0) { steps[i-1].classList.remove('active'); steps[i-1].classList.add('done'); }
     if (i < steps.length) {
       steps[i].classList.add('active');
       status.textContent = labels[i];
       i++;
-      setTimeout(advanceStep, 700 + Math.random() * 500);
+      setTimeout(advanceStep, 700 + Math.random() * 400);
     } else {
-      setTimeout(() => {
-        renderSnapshot(MOCK_DATA);
-        showScreen('snapshotScreen');
-        document.getElementById('btnExport').style.display = '';
-        document.getElementById('btnNewDeal').style.display = '';
-      }, 400);
+      animFinished = true;
     }
   }
   advanceStep();
+
+  // Real API call
+  try {
+    const form = new FormData();
+    form.append('file', selectedFile);
+    const res = await fetch('/analyze', { method: 'POST', body: form });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Server error ${res.status}`);
+    }
+    const data = await res.json();
+    window._snapshotData = data;
+
+    // Wait for animation to complete at least one full pass
+    const showResult = () => {
+      if (animFinished) {
+        renderSnapshot(data);
+        showScreen('snapshotScreen');
+        document.getElementById('btnNewDeal').style.display = '';
+        document.getElementById('btnMemo').style.display = '';
+        document.getElementById('btnExport').style.display = '';
+      } else {
+        setTimeout(showResult, 150);
+      }
+    };
+    showResult();
+  } catch (err) {
+    status.textContent = 'Error: ' + err.message;
+    document.querySelector('.processing-sub').textContent = 'Check that the server is running and try again.';
+    setTimeout(resetApp, 4000);
+  }
+}
+
+/* ===== MEMO ===== */
+function goToMemo() {
+  if (!window._snapshotData) return;
+  localStorage.setItem('dl_snapshot', JSON.stringify(window._snapshotData));
+  window.open('/memo.html', '_blank');
 }
 
 /* ===== SCREEN MANAGEMENT ===== */
@@ -1011,11 +1047,11 @@ function resetApp() {
   fileInfo.classList.remove('visible');
   analyzeBtn.classList.remove('visible');
   fileInput.value = '';
-  document.getElementById('btnExport').style.display = 'none';
-  document.getElementById('btnNewDeal').style.display = 'none';
+  window._snapshotData = null;
+  ['btnExport','btnNewDeal','btnMemo'].forEach(id => { document.getElementById(id).style.display = 'none'; });
   document.getElementById('snapshotScreen').innerHTML = '';
-  // Reset processing steps
-  document.querySelectorAll('.processing-step').forEach(s => { s.classList.remove('active', 'done'); });
+  document.querySelector('.processing-sub').textContent = 'Analyzing your pitch deck';
+  document.querySelectorAll('.processing-step').forEach(s => s.classList.remove('active','done'));
   showScreen('uploadScreen');
 }
 
